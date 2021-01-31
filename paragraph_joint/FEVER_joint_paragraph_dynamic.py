@@ -205,7 +205,7 @@ if __name__ == "__main__":
     argparser.add_argument('--k', type=int, default=0)
     argparser.add_argument('--evaluation_step', type=int, default=50000)
     argparser.add_argument("--device", default=0)
-    argparser.add_argument("--debug", action="store_true")
+    argparser.add_argument("--to_console", action="store_true")
     logging.getLogger("transformers.tokenization_utils_base").setLevel(logging.ERROR)
 
     reset_random_seed(12345)
@@ -214,7 +214,7 @@ if __name__ == "__main__":
 
     with open(args.checkpoint+".log", 'w') as f:
         # If we're debugging, don't redirect.
-        if not args.debug:
+        if not args.to_console:
             sys.stdout = f
 
         device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else 'cpu')
@@ -246,8 +246,15 @@ if __name__ == "__main__":
         model = JointParagraphClassifier(args.repfile, args.bert_dim,
                                           args.dropout).to(device)
 
+        # NOTE(dwadden) For some reason, the `position_ids` are missing. Deal
+        # with this by just using the ones from the original model; they
+        # shouldn't change.
         if args.pre_trained_model is not None:
-            model.load_state_dict(torch.load(args.pre_trained_model))
+            loaded = torch.load(args.pre_trained_model)
+            if "bert.embeddings.position_ids" not in loaded:
+                loaded["bert.embeddings.position_ids"] = model.state_dict()["bert.embeddings.position_ids"]
+
+            model.load_state_dict(loaded)
             print("Loaded pre-trained model.")
 
         if train:
@@ -319,15 +326,18 @@ if __name__ == "__main__":
 
 
         if test:
-            model = JointParagraphClassifier(args.repfile, args.bert_dim,
-                                              args.dropout).to(device)
-            model.load_state_dict(torch.load(args.checkpoint))
+            # NOTE(dwadden) Don't need this.
+            # model = JointParagraphClassifier(args.repfile, args.bert_dim,
+            #                                   args.dropout).to(device)
+            # model.load_state_dict(torch.load(args.pre_trained_model))
 
 
             # Evaluation
+            print("Evaluating.")
             subset_dev = Subset(dev_set, range(0, 10000))
             dev_score = evaluation(model, subset_dev)
             print(f'Test stance f1 p r: %.4f, %.4f, %.4f, rationale f1 p r: %.4f, %.4f, %.4f' % dev_score)
+
 
             if train:
                 params["stance_f1"] = dev_score[0]

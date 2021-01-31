@@ -3,6 +3,6 @@ python paragraph_joint/FEVER_joint_paragraph_dynamic.py \
     --bert_dim 768 \
     --max_sent_len 4096 \
     --epoch 5 \
-    --checkpoint model/fever_longformer_base_joint_paragraph_dynamic \
-    --log_file log/fever_longformer_base_joint_paragraph_performances.jsonl \
-    --device 1
+    --checkpoint model/fever_longformer_base/fever_longformer_base_joint_paragraph_dynamic \
+    --log_file log/fever_longformer_base/fever_longformer_base_joint_paragraph_performances.jsonl \
+    --device 0

@@ -82,8 +82,6 @@ def evaluation(model, dataset):
     rationale_recall = recall_score(flatten(rationale_labels),flatten(rationale_predictions))
     return stance_f1, stance_precision, stance_recall, rationale_f1, rationale_precision, rationale_recall
 
-
-
 def encode(tokenizer, batch, max_sent_len = 512):
     def truncate(input_ids, max_length, sep_token_id, pad_token_id):
         def longest_first_truncation(sentences, objective):
@@ -112,6 +110,19 @@ def encode(tokenizer, batch, max_sent_len = 512):
 
         return torch.cat(all_paragraphs, 0)
 
+    def make_global_attention_mask(input_ids, sep_token_id):
+        # For Longformer, assign global attention to everything before the evidence.
+        global_attention_mask = torch.zeros_like(input_ids)
+
+        for batch_ix in range(input_ids.size(0)):
+            entry = input_ids[batch_ix]
+            first_sep = torch.where(entry == sep_token_id)[0][0].item()
+            global_attention = torch.zeros_like(entry)
+            global_attention[:first_sep] = 1
+            global_attention_mask[batch_ix] = global_attention
+
+        return global_attention_mask
+
     inputs = zip(batch["claim"], batch["paragraph"])
     # Transformers no long accepts zips; needs to be converted to list.
     inputs = [x for x in inputs]
@@ -134,6 +145,11 @@ def encode(tokenizer, batch, max_sent_len = 512):
                 'attention_mask': encoded_dict['attention_mask'][:,:max_sent_len]
             }
 
+    # For Longformer, need to do the global attention mask.
+    if "longformer" in tokenizer.name_or_path:
+        encoded_dict["global_attention_mask"] = make_global_attention_mask(
+            encoded_dict["input_ids"], tokenizer.sep_token_id)
+
     return encoded_dict
 
 def token_idx_by_sentence(input_ids, sep_token_id, model_name):
@@ -153,6 +169,8 @@ def token_idx_by_sentence(input_ids, sep_token_id, model_name):
     all_word_indices = []
     for paragraph in sep_indices:
         # Since `longformer` has the same tokenizer as RoBERTa, this should work.
+        # NOTE(dwadden) We take paragraph [1:] because the RoBERTa tokenizer
+        # puts two sep tokens between the claim and the evidence doc.
         if "roberta" in model_name or "longformer" in model_name:
             paragraph = paragraph[1:]
         word_indices = [torch.arange(paragraph[i]+1, paragraph[i+1]+1) for i in range(paragraph.size(0)-1)]
@@ -252,6 +270,7 @@ if __name__ == "__main__":
                 tq = tqdm(DataLoader(train_set, batch_size = args.batch_size, shuffle=True))
                 for i, batch in enumerate(tq):
                     encoded_dict = encode(tokenizer, batch, args.max_sent_len)
+                    # NOTE(dwadden) These give the indices for each sentence in the evidence.
                     transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"], tokenizer.sep_token_id, args.repfile)
                     encoded_dict = {key: tensor.to(device) for key, tensor in encoded_dict.items()}
                     transformation_indices = [tensor.to(device) for tensor in transformation_indices]

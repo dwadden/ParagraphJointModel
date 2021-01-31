@@ -178,6 +178,7 @@ class JointParagraphClassifier(nn.Module):
         ]
 
     def forward(self, encoded_dict, transformation_indices, stance_label = None, rationale_label = None, sample_p=1, rationale_score = False):
+        # NOTE(dwadden) `indices_by_batch` gives the indices of the sentences in the evidence.
         batch_indices, indices_by_batch, mask = transformation_indices # (batch_size, N_sep, N_token)
         bert_out = self.bert(**encoded_dict)[0] # (BATCH_SIZE, sequence_len, BERT_DIM)
         bert_tokens = bert_out[batch_indices, indices_by_batch, :]

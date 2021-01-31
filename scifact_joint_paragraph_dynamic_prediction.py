@@ -35,19 +35,19 @@ def predict(model, dataset):
     model.eval()
     rationale_predictions = []
     stance_preds = []
-    
+
     def remove_dummy(rationale_out):
         return [out[1:] for out in rationale_out]
 
     with torch.no_grad():
         for batch in tqdm(DataLoader(dataset, batch_size = args.batch_size, shuffle=False)):
             encoded_dict = encode(tokenizer, batch)
-            transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"], 
+            transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"],
                                                            tokenizer.sep_token_id, args.repfile)
             encoded_dict = {key: tensor.to(device) for key, tensor in encoded_dict.items()}
             transformation_indices = [tensor.to(device) for tensor in transformation_indices]
             rationale_out, stance_out, _, _ = model(encoded_dict, transformation_indices)
-            stance_preds.extend(stance_out)                
+            stance_preds.extend(stance_out)
             rationale_predictions.extend(remove_dummy(rationale_out))
 
     return rationale_predictions, stance_preds
@@ -89,14 +89,14 @@ def encode(tokenizer, batch, max_sent_len = 512):
     if encoded_dict['input_ids'].size(1) > max_sent_len:
         if 'token_type_ids' in encoded_dict:
             encoded_dict = {
-                "input_ids": truncate(encoded_dict['input_ids'], max_sent_len, 
+                "input_ids": truncate(encoded_dict['input_ids'], max_sent_len,
                                       tokenizer.sep_token_id, tokenizer.pad_token_id),
                 'token_type_ids': encoded_dict['token_type_ids'][:,:max_sent_len],
                 'attention_mask': encoded_dict['attention_mask'][:,:max_sent_len]
             }
         else:
             encoded_dict = {
-                "input_ids": truncate(encoded_dict['input_ids'], max_sent_len, 
+                "input_ids": truncate(encoded_dict['input_ids'], max_sent_len,
                                       tokenizer.sep_token_id, tokenizer.pad_token_id),
                 'attention_mask': encoded_dict['attention_mask'][:,:max_sent_len]
             }
@@ -127,7 +127,7 @@ def token_idx_by_sentence(input_ids, sep_token_id, model_name):
     indices_by_sentence_split = torch.split(indices_by_sentence,paragraph_lens)
     indices_by_batch = nn.utils.rnn.pad_sequence(indices_by_sentence_split, batch_first=True, padding_value=padding_idx)
     batch_indices = torch.arange(sep_tokens.size(0)).unsqueeze(-1).unsqueeze(-1).expand(-1,indices_by_batch.size(1),indices_by_batch.size(-1))
-    mask = (indices_by_batch>=0) 
+    mask = (indices_by_batch>=0)
 
     return batch_indices.long(), indices_by_batch.long(), mask.long()
 
@@ -169,27 +169,27 @@ if __name__ == "__main__":
     argparser.add_argument('--prediction', type=str)
     argparser.add_argument('--log_file', type=str, default = "prediction_dynamic.log")
     argparser.add_argument('--evaluate', action='store_true')
-    
-    
+
+
     logging.getLogger("transformers.tokenization_utils_base").setLevel(logging.ERROR)
-    
+
     reset_random_seed(12345)
-    
+
     args = argparser.parse_args()
     params = vars(args)
-    
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = AutoTokenizer.from_pretrained(args.repfile)
 
-    dev_set = SciFactParagraphBatchDataset(args.corpus_file, args.test_file, 
+    dev_set = SciFactParagraphBatchDataset(args.corpus_file, args.test_file,
                                            sep_token = tokenizer.sep_token, k = args.k, train=False)
-    
-    model = JointParagraphClassifier(args.repfile, args.bert_dim, 
+
+    model = JointParagraphClassifier(args.repfile, args.bert_dim,
                                       args.dropout).to(device)
 
     model.load_state_dict(torch.load(args.checkpoint))
     print("Loaded saved model.")
-        
+
     reset_random_seed(12345)
     rationale_predictions, stance_preds = predict(model, dev_set)
     rationale_json = rationale2json(dev_set.samples, rationale_predictions)
@@ -200,11 +200,11 @@ if __name__ == "__main__":
         with jsonlines.open(args.rationale_selection, 'w') as output:
             for result in rationale_json:
                 output.write(result)
-    if args.label_prediction is not None:          
+    if args.label_prediction is not None:
         with jsonlines.open(args.label_prediction, 'w') as output:
             for result in stance_json:
                 output.write(result)
-    if args.prediction is not None:          
+    if args.prediction is not None:
         with jsonlines.open(args.prediction, 'w') as output:
             for result in merged_json:
                 output.write(result)

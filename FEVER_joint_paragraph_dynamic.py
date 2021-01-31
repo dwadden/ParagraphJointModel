@@ -183,6 +183,7 @@ if __name__ == "__main__":
     argparser.add_argument('--batch_size', type=int, default=1) # roberta-large: 2; bert: 8
     argparser.add_argument('--k', type=int, default=0)
     argparser.add_argument('--evaluation_step', type=int, default=50000)
+    argparser.add_argument("--device", default=0)
     logging.getLogger("transformers.tokenization_utils_base").setLevel(logging.ERROR)
 
     reset_random_seed(12345)
@@ -192,7 +193,7 @@ if __name__ == "__main__":
     with open(args.checkpoint+".log", 'w') as f:
         sys.stdout = f
 
-        device = torch.device("cuda:0" if torch.cuda.is_available() else 'cpu')
+        device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else 'cpu')
         tokenizer = AutoTokenizer.from_pretrained(args.repfile)
 
         if args.train_file:
@@ -244,6 +245,7 @@ if __name__ == "__main__":
                 sample_p = schedule_sample_p(epoch, args.epoch)
                 tq = tqdm(DataLoader(train_set, batch_size = args.batch_size, shuffle=True))
                 for i, batch in enumerate(tq):
+                    import ipdb; ipdb.set_trace()
                     encoded_dict = encode(tokenizer, batch)
                     transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"], tokenizer.sep_token_id, args.repfile)
                     encoded_dict = {key: tensor.to(device) for key, tensor in encoded_dict.items()}

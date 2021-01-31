@@ -117,7 +117,7 @@ def clean_words(str_seqs):
         processed_clauses = []
         for clause in str_seq:
             filtered = []
-            tokens = clause.split()                 
+            tokens = clause.split()
             for word in tokens:
                 word = clean_url(word)
                 word = clean_num(word)
@@ -141,7 +141,7 @@ def test_f1(test_file,pred_label_seqs):
     f1 = f1_score(true_label,pred_label,average="weighted")
     print("F1 score:",f1)
     return f1
-    
+
 def postprocess(dataset, raw_flattened_output, raw_flattened_labels, MAX_SEQ_LEN):
     ground_truth_labels = []
     paragraph_lens = []
@@ -175,15 +175,15 @@ def postprocess(dataset, raw_flattened_output, raw_flattened_labels, MAX_SEQ_LEN
         batch_i += 1
         predicted_tags.append(predict_tag)
         gt_tags.append(gt_tag)
-        
-        
+
+
     predicted_tags = from_BIO(predicted_tags)
     final_gt = from_BIO(gt_tags)
 
     return predicted_tags, final_gt
 
 def stance_postprocess(dataset, raw_output, raw_labels, MAX_SEQ_LEN):
-    
+
     def combine(candidates):
         assert(len(candidates)>0)
         types = set(candidates)
@@ -193,8 +193,8 @@ def stance_postprocess(dataset, raw_output, raw_labels, MAX_SEQ_LEN):
             return 2
         else:
             return 1
-            
-    
+
+
     ground_truth_labels = []
     paragraph_lens = []
     for para in dataset.true_pairs:
@@ -237,7 +237,7 @@ def rationale2json(true_pairs, predictions, excluded_pairs = None):
     for pair, prediction in zip(true_pairs, predictions):
         claim_id = pair["claim_id"]
         claim_ids.append(claim_id)
-        
+
         predicted_sentences = []
         for i, pred in enumerate(prediction):
             if pred == "rationale" or pred == 1:

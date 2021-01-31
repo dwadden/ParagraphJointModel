@@ -31,19 +31,19 @@ if __name__ == "__main__":
     args = argparser.parse_args()
     claim_file = args.claim_file
     corpus_file = args.corpus_file
-    
+
     corpus = {}
     with open(corpus_file) as f:
         for line in f:
             abstract = json.loads(line)
             corpus[str(abstract["doc_id"])] = abstract
-            
+
     claims = []
     with open(claim_file) as f:
         for line in f:
             claim = json.loads(line)
             claims.append(claim)
-    
+
     model_path = args.sentvec_path
     model = sent2vec.Sent2vecModel()
     try:
@@ -51,9 +51,9 @@ if __name__ == "__main__":
     except Exception as e:
         print(e)
     print('model successfully loaded')
-    
+
     stop_words = set(stopwords.words('english'))
-    
+
     # By paragraph embedding
     corpus_embeddings = {}
     for k, v in corpus.items():
@@ -61,15 +61,15 @@ if __name__ == "__main__":
         processed_paragraph = " ".join([preprocess_sentence(sentence) for sentence in original_sentences])
         sentence_vector = model.embed_sentence(processed_paragraph)
         corpus_embeddings[k] = sentence_vector
-        
+
     with open(args.corpus_embedding_pickle,"wb") as f:
         pickle.dump(corpus_embeddings,f)
-        
+
     claim_embeddings = {}
     for claim in claims:
         processed_sentence = preprocess_sentence(claim['claim'])
         sentence_vector = model.embed_sentence(processed_sentence)
         claim_embeddings[claim["id"]] = sentence_vector
-        
+
     with open(args.claim_embedding_pickle,"wb") as f:
         pickle.dump(claim_embeddings,f)

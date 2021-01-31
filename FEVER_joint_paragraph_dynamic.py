@@ -51,14 +51,14 @@ def evaluation(model, dataset):
     rationale_labels = []
     stance_preds = []
     stance_labels = []
-    
+
     def remove_dummy(rationale_out):
         return [out[1:] for out in rationale_out]
 
     with torch.no_grad():
         for batch in tqdm(DataLoader(dataset, batch_size = args.batch_size, shuffle=False)):
             encoded_dict = encode(tokenizer, batch)
-            transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"], 
+            transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"],
                                                                tokenizer.sep_token_id, args.repfile)
             encoded_dict = {key: tensor.to(device) for key, tensor in encoded_dict.items()}
             transformation_indices = [tensor.to(device) for tensor in transformation_indices]
@@ -66,7 +66,7 @@ def evaluation(model, dataset):
             padded_rationale_label, rationale_label = batch_rationale_label(batch["label"], padding_idx = 2)
             if padded_rationale_label.size(1) == transformation_indices[-1].size(1):
                 rationale_out, stance_out, rationale_loss, stance_loss = \
-                    model(encoded_dict, transformation_indices, stance_label = stance_label, 
+                    model(encoded_dict, transformation_indices, stance_label = stance_label,
                           rationale_label = padded_rationale_label.to(device))
                 stance_preds.extend(stance_out)
                 stance_labels.extend(stance_label.cpu().numpy().tolist())
@@ -120,14 +120,14 @@ def encode(tokenizer, batch, max_sent_len = 512):
     if encoded_dict['input_ids'].size(1) > max_sent_len:
         if 'token_type_ids' in encoded_dict:
             encoded_dict = {
-                "input_ids": truncate(encoded_dict['input_ids'], max_sent_len, 
+                "input_ids": truncate(encoded_dict['input_ids'], max_sent_len,
                                       tokenizer.sep_token_id, tokenizer.pad_token_id),
                 'token_type_ids': encoded_dict['token_type_ids'][:,:max_sent_len],
                 'attention_mask': encoded_dict['attention_mask'][:,:max_sent_len]
             }
         else:
             encoded_dict = {
-                "input_ids": truncate(encoded_dict['input_ids'], max_sent_len, 
+                "input_ids": truncate(encoded_dict['input_ids'], max_sent_len,
                                       tokenizer.sep_token_id, tokenizer.pad_token_id),
                 'attention_mask': encoded_dict['attention_mask'][:,:max_sent_len]
             }
@@ -159,7 +159,7 @@ def token_idx_by_sentence(input_ids, sep_token_id, model_name):
     indices_by_sentence_split = torch.split(indices_by_sentence,paragraph_lens)
     indices_by_batch = nn.utils.rnn.pad_sequence(indices_by_sentence_split, batch_first=True, padding_value=padding_idx)
     batch_indices = torch.arange(sep_tokens.size(0)).unsqueeze(-1).unsqueeze(-1).expand(-1,indices_by_batch.size(1),indices_by_batch.size(-1))
-    mask = (indices_by_batch>=0) 
+    mask = (indices_by_batch>=0)
 
     return batch_indices.long(), indices_by_batch.long(), mask.long()
 
@@ -184,11 +184,11 @@ if __name__ == "__main__":
     argparser.add_argument('--k', type=int, default=0)
     argparser.add_argument('--evaluation_step', type=int, default=50000)
     logging.getLogger("transformers.tokenization_utils_base").setLevel(logging.ERROR)
-    
+
     reset_random_seed(12345)
 
     args = argparser.parse_args()
-    
+
     with open(args.checkpoint+".log", 'w') as f:
         sys.stdout = f
 
@@ -211,14 +211,14 @@ if __name__ == "__main__":
             print(k,v)
 
         if train:
-            train_set = FEVERParagraphBatchDataset(args.train_file, 
+            train_set = FEVERParagraphBatchDataset(args.train_file,
                                                      sep_token = tokenizer.sep_token, k=args.k)
-        dev_set = FEVERParagraphBatchDataset(args.test_file, 
+        dev_set = FEVERParagraphBatchDataset(args.test_file,
                                                sep_token = tokenizer.sep_token, k=args.k)
 
         print("Loaded dataset!")
 
-        model = JointParagraphClassifier(args.repfile, args.bert_dim, 
+        model = JointParagraphClassifier(args.repfile, args.bert_dim,
                                           args.dropout).to(device)
 
         if args.pre_trained_model is not None:
@@ -252,7 +252,7 @@ if __name__ == "__main__":
                     padded_rationale_label, rationale_label = batch_rationale_label(batch["label"], padding_idx = 2)
                     if padded_rationale_label.size(1) == transformation_indices[-1].size(1): # Skip some rare cases with inconsistent input size.
                         rationale_out, stance_out, rationale_loss, stance_loss = \
-                            model(encoded_dict, transformation_indices, stance_label = stance_label, 
+                            model(encoded_dict, transformation_indices, stance_label = stance_label,
                                   rationale_label = padded_rationale_label.to(device), sample_p = sample_p)
                         rationale_loss *= args.loss_ratio
                         loss = rationale_loss + stance_loss
@@ -264,11 +264,11 @@ if __name__ == "__main__":
                         optimizer.step()
                         optimizer.zero_grad()
                         tq.set_description(f'Epoch {epoch}, iter {i}, loss: {round(loss.item(), 4)}, stance loss: {round(stance_loss.item(), 4)}, rationale loss: {round(rationale_loss.item(), 4)}')
-                        
+
 
                     if i % args.evaluation_step == args.evaluation_step-1:
                         torch.save(model.state_dict(), args.checkpoint+"_"+str(epoch)+"_"+str(i)+".model")
-                        
+
                         # Evaluation
                         subset_train = Subset(train_set, range(0, 1000))
                         train_score = evaluation(model, subset_train)
@@ -293,7 +293,7 @@ if __name__ == "__main__":
 
 
         if test:
-            model = JointParagraphClassifier(args.repfile, args.bert_dim, 
+            model = JointParagraphClassifier(args.repfile, args.bert_dim,
                                               args.dropout).to(device)
             model.load_state_dict(torch.load(args.checkpoint))
 

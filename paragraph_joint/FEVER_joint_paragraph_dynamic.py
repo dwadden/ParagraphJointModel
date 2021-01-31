@@ -113,9 +113,11 @@ def encode(tokenizer, batch, max_sent_len = 512):
         return torch.cat(all_paragraphs, 0)
 
     inputs = zip(batch["claim"], batch["paragraph"])
+    # Transformers no long accepts zips; needs to be converted to list.
+    inputs = [x for x in inputs]
     encoded_dict = tokenizer.batch_encode_plus(
         inputs,
-        pad_to_max_length=True,add_special_tokens=True,
+        padding="longest", add_special_tokens=True,
         return_tensors='pt')
     if encoded_dict['input_ids'].size(1) > max_sent_len:
         if 'token_type_ids' in encoded_dict:
@@ -150,7 +152,8 @@ def token_idx_by_sentence(input_ids, sep_token_id, model_name):
     paragraph_lens = []
     all_word_indices = []
     for paragraph in sep_indices:
-        if "roberta" in model_name:
+        # Since `longformer` has the same tokenizer as RoBERTa, this should work.
+        if "roberta" in model_name or "longformer" in model_name:
             paragraph = paragraph[1:]
         word_indices = [torch.arange(paragraph[i]+1, paragraph[i+1]+1) for i in range(paragraph.size(0)-1)]
         paragraph_lens.append(len(word_indices))
@@ -166,16 +169,16 @@ def token_idx_by_sentence(input_ids, sep_token_id, model_name):
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Train, cross-validate and run sentence sequence tagger")
     argparser.add_argument('--repfile', type=str, default = "roberta-large", help="Word embedding file")
-    argparser.add_argument('--train_file', type=str, default="/nas/home/xiangcil/scifact/data/fever_train_retrieved.jsonl")
+    argparser.add_argument('--train_file', type=str, default="fever/fever_train_retrieved_5.jsonl")
     argparser.add_argument('--pre_trained_model', type=str)
     #argparser.add_argument('--train_file', type=str)
-    argparser.add_argument('--test_file', type=str, default="/nas/home/xiangcil/scifact/data/fever_dev_retrieved.jsonl")
+    argparser.add_argument('--test_file', type=str, default="fever/fever_dev_retrieved_5.jsonl")
     argparser.add_argument('--bert_lr', type=float, default=1e-5, help="Learning rate for BERT-like LM")
     argparser.add_argument('--lr', type=float, default=5e-6, help="Learning rate")
     argparser.add_argument('--dropout', type=float, default=0, help="embedding_dropout rate")
     argparser.add_argument('--bert_dim', type=int, default=1024, help="bert_dimension")
     argparser.add_argument('--epoch', type=int, default=10, help="Training epoch")
-    argparser.add_argument('--MAX_SENT_LEN', type=int, default=512)
+    argparser.add_argument('--max_sent_len', type=int, default=512)
     argparser.add_argument('--loss_ratio', type=float, default=5)
     argparser.add_argument('--checkpoint', type=str, default = "fever_roberta_joint_paragraph_dynamic")
     argparser.add_argument('--log_file', type=str, default = "fever_joint_paragraph_performances.jsonl")
@@ -184,6 +187,7 @@ if __name__ == "__main__":
     argparser.add_argument('--k', type=int, default=0)
     argparser.add_argument('--evaluation_step', type=int, default=50000)
     argparser.add_argument("--device", default=0)
+    argparser.add_argument("--debug", action="store_true")
     logging.getLogger("transformers.tokenization_utils_base").setLevel(logging.ERROR)
 
     reset_random_seed(12345)
@@ -191,7 +195,9 @@ if __name__ == "__main__":
     args = argparser.parse_args()
 
     with open(args.checkpoint+".log", 'w') as f:
-        sys.stdout = f
+        # If we're debugging, don't redirect.
+        if not args.debug:
+            sys.stdout = f
 
         device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else 'cpu')
         tokenizer = AutoTokenizer.from_pretrained(args.repfile)
@@ -245,8 +251,7 @@ if __name__ == "__main__":
                 sample_p = schedule_sample_p(epoch, args.epoch)
                 tq = tqdm(DataLoader(train_set, batch_size = args.batch_size, shuffle=True))
                 for i, batch in enumerate(tq):
-                    import ipdb; ipdb.set_trace()
-                    encoded_dict = encode(tokenizer, batch)
+                    encoded_dict = encode(tokenizer, batch, args.max_sent_len)
                     transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"], tokenizer.sep_token_id, args.repfile)
                     encoded_dict = {key: tensor.to(device) for key, tensor in encoded_dict.items()}
                     transformation_indices = [tensor.to(device) for tensor in transformation_indices]

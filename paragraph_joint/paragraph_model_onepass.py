@@ -71,77 +71,9 @@ class ClassificationHead(nn.Module):
         return x
 
 
-class WordAttention(nn.Module):
-    """
-    x: (BATCH_SIZE, N_sentence, N_token, INPUT_SIZE)
-    token_mask: (batch_size, N_sep, N_token)
-    out: (BATCH_SIZE, N_sentence, INPUT_SIZE)
-    mask: (BATCH_SIZE, N_sentence)
-    """
-    def __init__(self, INPUT_SIZE, PROJ_SIZE, dropout = 0.1):
-        super(WordAttention, self).__init__()
-        self.activation = torch.tanh
-        self.att_proj = TimeDistributedDense(INPUT_SIZE, PROJ_SIZE)
-        self.dropout = nn.Dropout(dropout)
-        self.att_scorer = TimeDistributedDense(PROJ_SIZE, 1)
-
-    def forward(self, x, token_mask):
-        proj_input = self.att_proj(self.dropout(x.view(-1, x.size(-1))))
-        proj_input = self.dropout(self.activation(proj_input))
-        raw_att_scores = self.att_scorer(proj_input).squeeze(-1).view(x.size(0),x.size(1),x.size(2)) # (Batch_size, N_sentence, N_token)
-        att_scores = F.softmax(raw_att_scores.masked_fill((1 - token_mask).bool(), float('-inf')), dim=-1)
-        att_scores = torch.where(torch.isnan(att_scores), torch.zeros_like(att_scores), att_scores) # Replace NaN with 0
-        batch_att_scores = att_scores.view(-1, att_scores.size(-1)) # (Batch_size * N_sentence, N_token)
-        out = torch.bmm(batch_att_scores.unsqueeze(1), x.view(-1, x.size(2), x.size(3))).squeeze(1)
-        # (Batch_size * N_sentence, INPUT_SIZE)
-        out = out.view(x.size(0), x.size(1), x.size(-1))
-        mask = token_mask[:,:,0]
-        return out, mask
-
-class DynamicSentenceAttention(nn.Module):
-    """
-    input: (BATCH_SIZE, N_sentence, INPUT_SIZE)
-    output: (BATCH_SIZE, INPUT_SIZE)
-    """
-    def __init__(self, INPUT_SIZE, PROJ_SIZE, REC_HID_SIZE = None, dropout = 0.1):
-        super(DynamicSentenceAttention, self).__init__()
-        self.activation = torch.tanh
-        self.att_proj = TimeDistributedDense(INPUT_SIZE, PROJ_SIZE)
-        self.dropout = nn.Dropout(dropout)
-
-        if REC_HID_SIZE is not None:
-            self.contextualized = True
-            self.lstm = nn.LSTM(PROJ_SIZE, REC_HID_SIZE, bidirectional = False, batch_first = True)
-            self.att_scorer = TimeDistributedDense(REC_HID_SIZE, 2)
-        else:
-            self.contextualized = False
-            self.att_scorer = TimeDistributedDense(PROJ_SIZE, 2)
-
-    def forward(self, sentence_reps, sentence_mask, att_scores, valid_scores):
-        # sentence_reps: (BATCH_SIZE, N_sentence, INPUT_SIZE)
-        # sentence_mask: (BATCH_SIZE, N_sentence)
-        # att_scores: (BATCH_SIZE, N_sentence)
-        # valid_scores: (BATCH_SIZE, N_sentence)
-        # result: (BATCH_SIZE, INPUT_SIZE)
-        #att_scores = rationale_out[:,:,1] # (BATCH_SIZE, N_sentence)
-        #valid_scores = rationale_out[:,:,1] > rationale_out[:,:,0] # Only consider sentences predicted as rationales
-        sentence_mask = torch.logical_and(sentence_mask, valid_scores)
-
-        # Force those sentence representations in paragraph without rationale to be 0.
-        #NEI_mask = (torch.sum(sentence_mask, axis=1) > 0).long().unsqueeze(-1).expand(-1, sentence_reps.size(-1))
-
-        if sentence_reps.size(0) > 0:
-            att_scores = F.softmax(att_scores.masked_fill((~sentence_mask).bool(), -1e4), dim=-1)
-            #att_scores = torch.where(torch.isnan(att_scores), torch.zeros_like(att_scores), att_scores) # Replace NaN with 0
-            result = torch.bmm(att_scores.unsqueeze(1), sentence_reps).squeeze(1)
-            return result# * NEI_mask
-        else:
-            return sentence_reps[:,0,:]# * NEI_mask
-
-
-class JointParagraphClassifier(nn.Module):
+class OnePassParagraphClassifier(nn.Module):
     def __init__(self, bert_path, bert_dim, dropout = 0.1, ignore_index=2):
-        super(JointParagraphClassifier, self).__init__()
+        super(OnePassParagraphClassifier, self).__init__()
         self.stance_label_size = 3
         self.rationale_label_size = 2
         self.ignore_index = 2
@@ -149,14 +81,12 @@ class JointParagraphClassifier(nn.Module):
         self.stance_criterion = nn.CrossEntropyLoss()
         self.rationale_criterion = nn.CrossEntropyLoss(ignore_index = 2)
         self.dropout = dropout
+        self.dropout_layer = nn.Dropout(self.dropout)
         self.bert_dim = bert_dim
-        self.sentence_attention = DynamicSentenceAttention(bert_dim, bert_dim, dropout=dropout)
-        self.word_attention = WordAttention(bert_dim, bert_dim, dropout=dropout)
-        self.rationale_linear = ClassificationHead(bert_dim, self.rationale_label_size, hidden_dropout_prob = dropout)
+        # Twice the bert_dim since we're going to use the <s> token and the relevant </s> token.
+        self.rationale_linear = ClassificationHead(2 * bert_dim, self.rationale_label_size, hidden_dropout_prob = dropout)
         self.stance_linear = ClassificationHead(bert_dim, self.stance_label_size, hidden_dropout_prob = dropout)
         self.extra_modules = [
-            self.sentence_attention,
-            self.word_attention,
             self.rationale_linear,
             self.stance_linear,
             self.stance_criterion,
@@ -164,39 +94,35 @@ class JointParagraphClassifier(nn.Module):
         ]
 
     def reinitialize(self):
+        # TODO(dwadden) Does this actually help?
         self.extra_modules = []
         self.rationale_linear = ClassificationHead(self.bert_dim, self.rationale_label_size, hidden_dropout_prob = self.dropout)
         self.stance_linear = ClassificationHead(self.bert_dim, self.stance_label_size, hidden_dropout_prob = self.dropout)
-        self.sentence_attention = DynamicSentenceAttention(self.bert_dim, self.bert_dim, dropout=self.dropout)
         self.extra_modules = [
             self.rationale_linear,
             self.stance_linear,
             self.stance_criterion,
             self.rationale_criterion,
-            self.word_attention,
-            self.sentence_attention
         ]
 
     def forward(self, encoded_dict, transformation_indices, stance_label = None, rationale_label = None, sample_p=1, rationale_score = False):
-        # NOTE(dwadden) `indices_by_batch` gives the indices of the sentences in the evidence.
-        batch_indices, indices_by_batch, mask = transformation_indices # (batch_size, N_sep, N_token)
-        bert_out = self.bert(**encoded_dict)[0] # (BATCH_SIZE, sequence_len, BERT_DIM)
-        bert_tokens = bert_out[batch_indices, indices_by_batch, :]
-        # bert_tokens: (batch_size, N_sep, N_token, BERT_dim)
-        sentence_reps, sentence_mask = self.word_attention(bert_tokens, mask)
-        # (Batch_size, N_sep, BERT_DIM), (Batch_size, N_sep)
-        #print(bert_out.shape, bert_tokens.shape, sentence_reps.shape, sentence_mask.shape, rationale_label.shape)
-        rationale_out = self.rationale_linear(sentence_reps) # (Batch_size, N_sep, 2)
-        att_scores = rationale_out[:,:,1] # (BATCH_SIZE, N_sentence)
+        # NOTE(dwadden) In this model, the `transformation_indices` are just the
+        # indices of the sentence separators.
+        encoded = self.bert(**encoded_dict)
+        bert_out = encoded.last_hidden_state  # (BATCH_SIZE, sequence_len, BERT_DIM)
 
-        if bool(torch.rand(1) < sample_p): # Choose sentence according to predicted rationale
-            valid_scores = rationale_out[:,:,1] > rationale_out[:,:,0]
-        else:
-            valid_scores = rationale_label == 1 # Ground truth
-        paragraph_rep = self.sentence_attention(sentence_reps, sentence_mask, att_scores, valid_scores)
-        # (BATCH_SIZE, BERT_DIM)
+        pooled_output = self.dropout_layer(encoded.pooler_output)
+        stance_out = self.stance_linear(pooled_output)
 
-        stance_out = self.stance_linear(paragraph_rep) # (Batch_size, 3)
+        # This only works for a batch size of 1. Will deal with scaling up later.
+        sent_indices = transformation_indices[0]
+        sentence_reps = bert_out[0][sent_indices[0]]
+        pooled_rep = pooled_output.repeat([sentence_reps.size(0), 1])
+        sentence_cat = torch.cat([pooled_rep, sentence_reps], dim=1)
+        rationale_out = self.rationale_linear(sentence_cat).unsqueeze(0)
+
+        # Since we've got a batch of 1, the mask is always on.
+        sentence_mask = torch.ones_like(sent_indices)
 
         if stance_label is not None:
             stance_loss = self.stance_criterion(stance_out, stance_label)

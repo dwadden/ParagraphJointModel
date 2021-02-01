@@ -23,6 +23,7 @@ import numpy as np
 from tqdm import tqdm
 from util import arg2param, flatten, stance2json, rationale2json
 from paragraph_model_dynamic import JointParagraphClassifier
+from paragraph_model_onepass import OnePassParagraphClassifier
 from dataset import FEVERParagraphBatchDataset
 
 import logging
@@ -58,10 +59,17 @@ def evaluation(model, dataset):
     with torch.no_grad():
         for batch in tqdm(DataLoader(dataset, batch_size = args.batch_size, shuffle=False)):
             encoded_dict = encode(tokenizer, batch)
-            transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"],
-                                                               tokenizer.sep_token_id, args.repfile)
-            encoded_dict = {key: tensor.to(device) for key, tensor in encoded_dict.items()}
+
+            # Like in the training loop, need different types of transformation
+            # indices based on model.
+            if isinstance(model, OnePassParagraphClassifier):
+                transformation_indices = get_sep_tokens(encoded_dict["input_ids"], tokenizer.sep_token_id, args.repfile)
+            else:
+                # Otherwise, get the indices for each sentence in the evidence.
+                transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"], tokenizer.sep_token_id, args.repfile)
             transformation_indices = [tensor.to(device) for tensor in transformation_indices]
+
+            encoded_dict = {key: tensor.to(device) for key, tensor in encoded_dict.items()}
             stance_label = batch["stance"].to(device)
             padded_rationale_label, rationale_label = batch_rationale_label(batch["label"], padding_idx = 2)
             if padded_rationale_label.size(1) == transformation_indices[-1].size(1):
@@ -82,7 +90,7 @@ def evaluation(model, dataset):
     rationale_recall = recall_score(flatten(rationale_labels),flatten(rationale_predictions))
     return stance_f1, stance_precision, stance_recall, rationale_f1, rationale_precision, rationale_recall
 
-def encode(tokenizer, batch, max_sent_len = 512):
+def encode(tokenizer, batch, max_sent_len = 512, model_type="dynamic"):
     def truncate(input_ids, max_length, sep_token_id, pad_token_id):
         def longest_first_truncation(sentences, objective):
             sent_lens = [len(sent) for sent in sentences]
@@ -119,6 +127,13 @@ def encode(tokenizer, batch, max_sent_len = 512):
             first_sep = torch.where(entry == sep_token_id)[0][0].item()
             global_attention = torch.zeros_like(entry)
             global_attention[:first_sep] = 1
+            # If we're using the one-pass model, add global attention on the
+            # </s> tokens.
+            if model_type == "onepass":
+                sep_ix = entry == sep_token_id
+                global_attention[sep_ix] = 1
+
+            # Set the
             global_attention_mask[batch_ix] = global_attention
 
         return global_attention_mask
@@ -184,6 +199,14 @@ def token_idx_by_sentence(input_ids, sep_token_id, model_name):
 
     return batch_indices.long(), indices_by_batch.long(), mask.long()
 
+def get_sep_tokens(input_ids, sep_token_id, model_name):
+    sep_tokens = torch.where((input_ids == sep_token_id).bool())[1]
+    # Take the end of sentence token as the representation for each sentence.
+    sep_indices = sep_tokens[2:]
+    # Return a list to be consistent with `token_idx_by_sentence`.
+    return [sep_indices.unsqueeze(0)]
+
+
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Train, cross-validate and run sentence sequence tagger")
     argparser.add_argument('--repfile', type=str, default = "roberta-large", help="Word embedding file")
@@ -205,12 +228,16 @@ if __name__ == "__main__":
     argparser.add_argument('--k', type=int, default=0)
     argparser.add_argument('--evaluation_step', type=int, default=50000)
     argparser.add_argument("--device", default=0)
+    argparser.add_argument("--model_type", type=str, default="dynamic")
     argparser.add_argument("--to_console", action="store_true")
     logging.getLogger("transformers.tokenization_utils_base").setLevel(logging.ERROR)
 
     reset_random_seed(12345)
 
     args = argparser.parse_args()
+
+    # The code I added only works for a batch size of 1.
+    assert args.batch_size == 1
 
     with open(args.checkpoint+".log", 'w') as f:
         # If we're debugging, don't redirect.
@@ -243,8 +270,12 @@ if __name__ == "__main__":
 
         print("Loaded dataset!")
 
-        model = JointParagraphClassifier(args.repfile, args.bert_dim,
-                                          args.dropout).to(device)
+        assert args.model_type in ["onepass", "dynamic"]
+        if args.model_type == "onepass":
+            model = OnePassParagraphClassifier(args.repfile, args.bert_dim, args.dropout).to(device)
+        else:
+            model = JointParagraphClassifier(args.repfile, args.bert_dim,
+                                            args.dropout).to(device)
 
         # NOTE(dwadden) For some reason, the `position_ids` are missing. Deal
         # with this by just using the ones from the original model; they
@@ -276,11 +307,17 @@ if __name__ == "__main__":
                 sample_p = schedule_sample_p(epoch, args.epoch)
                 tq = tqdm(DataLoader(train_set, batch_size = args.batch_size, shuffle=True))
                 for i, batch in enumerate(tq):
-                    encoded_dict = encode(tokenizer, batch, args.max_sent_len)
-                    # NOTE(dwadden) These give the indices for each sentence in the evidence.
-                    transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"], tokenizer.sep_token_id, args.repfile)
-                    encoded_dict = {key: tensor.to(device) for key, tensor in encoded_dict.items()}
+                    encoded_dict = encode(tokenizer, batch, args.max_sent_len, args.model_type)
+                    # NOTE(dwadden) If we're doing the `onepass` model, just get
+                    # the indices of the sep tokens.
+                    if isinstance(model, OnePassParagraphClassifier):
+                        transformation_indices = get_sep_tokens(encoded_dict["input_ids"], tokenizer.sep_token_id, args.repfile)
+                    else:
+                        # Otherwise, get the indices for each sentence in the evidence.
+                        transformation_indices = token_idx_by_sentence(encoded_dict["input_ids"], tokenizer.sep_token_id, args.repfile)
                     transformation_indices = [tensor.to(device) for tensor in transformation_indices]
+
+                    encoded_dict = {key: tensor.to(device) for key, tensor in encoded_dict.items()}
                     stance_label = batch["stance"].to(device)
                     padded_rationale_label, rationale_label = batch_rationale_label(batch["label"], padding_idx = 2)
                     if padded_rationale_label.size(1) == transformation_indices[-1].size(1): # Skip some rare cases with inconsistent input size.
